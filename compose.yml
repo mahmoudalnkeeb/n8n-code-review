@@ -1,0 +1,18 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n_workflow_automation
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - TZ=Africa/Cairo
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - VUE_APP_URL_BASE_API=/
+    volumes:
+      - n8n_data:/home/node/.n8n
+volumes:
+  n8n_data:
+    driver: local

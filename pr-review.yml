@@ -1,0 +1,18 @@
+name: AI PR Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger n8n Workflow
+        run: |
+          curl -X POST YOUR_N8N_WEBHOOK_URL \
+            -H "Content-Type: application/json" \
+            -d '{
+              "pull_number": "${{ github.event.pull_request.number }}",
+              "repo_name": "${{ github.event.repository.name }}",
+              "username": "${{ github.repository_owner }}"
+            }'
