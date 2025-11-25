@@ -1,18 +1,77 @@
 name: AI PR Review
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
 
 jobs:
   ai-review:
     runs-on: ubuntu-latest
     steps:
+      - name: Log PR Information
+        run: |
+          echo "=== GITHUB ACTION - PR REVIEW TRIGGERED ==="
+          echo "Event: ${{ github.event_name }}"
+          echo "Action: ${{ github.event.action }}"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Repository Owner: ${{ github.repository_owner }}"
+          echo "Repository Name: ${{ github.event.repository.name }}"
+          echo "PR Title: ${{ github.event.pull_request.title }}"
+          echo "PR Author: ${{ github.event.pull_request.user.login }}"
+          echo "Base Branch: ${{ github.event.pull_request.base.ref }}"
+          echo "Head Branch: ${{ github.event.pull_request.head.ref }}"
+          echo "=== END PR INFORMATION ==="
+
+      - name: Validate Webhook URL
+        run: |
+          if [ -z "${{ secrets.N8N_WEBHOOK_URL }}" ]; then
+            echo "ERROR: N8N_WEBHOOK_URL secret is not set"
+            echo "Please add N8N_WEBHOOK_URL to your repository secrets"
+            exit 1
+          fi
+          echo "✓ Webhook URL is configured"
+
       - name: Trigger n8n Workflow
         run: |
-          curl -X POST YOUR_N8N_WEBHOOK_URL \
+          echo "=== TRIGGERING N8N WEBHOOK ==="
+          echo "Webhook URL: ${{ secrets.N8N_WEBHOOK_URL }}"
+          echo "Sending payload..."
+
+          RESPONSE=$(curl -X POST ${{ secrets.N8N_WEBHOOK_URL }} \
             -H "Content-Type: application/json" \
+            -w "\nHTTP_STATUS:%{http_code}" \
             -d '{
-              "pull_number": "${{ github.event.pull_request.number }}",
+              "pull_number": ${{ github.event.pull_request.number }},
               "repo_name": "${{ github.event.repository.name }}",
-              "username": "${{ github.repository_owner }}"
-            }'
+              "username": "${{ github.repository_owner }}",
+              "pr_title": "${{ github.event.pull_request.title }}",
+              "pr_author": "${{ github.event.pull_request.user.login }}",
+              "base_branch": "${{ github.event.pull_request.base.ref }}",
+              "head_branch": "${{ github.event.pull_request.head.ref }}",
+              "pr_url": "${{ github.event.pull_request.html_url }}",
+              "triggered_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }')
+
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d':' -f2)
+          RESPONSE_BODY=$(echo "$RESPONSE" | sed '/HTTP_STATUS/d')
+
+          echo "=== WEBHOOK RESPONSE ==="
+          echo "HTTP Status: $HTTP_STATUS"
+          echo "Response Body: $RESPONSE_BODY"
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "✓ Webhook triggered successfully"
+          else
+            echo "ERROR: Webhook returned status $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo "=== WEBHOOK TRIGGER COMPLETE ==="
+
+      - name: Log Completion
+        if: always()
+        run: |
+          echo "=== GITHUB ACTION COMPLETED ==="
+          echo "Status: ${{ job.status }}"
+          echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "=== END ==="
