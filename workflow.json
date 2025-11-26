@@ -1,0 +1,260 @@
+{
+  "name": "github PR reviewer",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cerebras.ai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.cerebrasPayload}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        912,
+        48
+      ],
+      "id": "8a6ee07f-63a7-4afa-98b4-871a786c605d",
+      "name": "get_code_review",
+      "credentials": {
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.url}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "body",
+              "value": "={{ $json.body }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1360,
+        48
+      ],
+      "id": "12675bc1-ac8f-4307-a254-0310e68ec845",
+      "name": "send_code_review",
+      "credentials": {
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('=== PR REVIEW WORKFLOW - DATA TRANSFORMATION START ===');\n\n// Get PR files from previous node\nconst prFiles = $input.all();\n\n// Access webhook data from body\nconst webhookData = $('trigger_code_review_pipeline').first().json.body;\n\nconsole.log('Webhook data structure:', JSON.stringify(webhookData, null, 2));\n\nconst pullNumber = webhookData.pull_number;\nconst repoName = webhookData.repo_name;\nconst username = webhookData.username;\nconst prTitle = webhookData.pr_title || 'No title';\nconst prAuthor = webhookData.pr_author || 'Unknown';\nconst prUrl = webhookData.pr_url || '';\n\nconsole.log('Pull Number:', pullNumber);\nconsole.log('Repo Name:', repoName);\nconsole.log('Username:', username);\nconsole.log('PR Title:', prTitle);\nconsole.log('PR Author:', prAuthor);\nconsole.log('Number of files changed:', prFiles.length);\n\n// Validate required data\nif (!pullNumber || !repoName || !username) {\n  console.error('ERROR: Missing required webhook data');\n  console.error('pull_number:', pullNumber);\n  console.error('repo_name:', repoName);\n  console.error('username:', username);\n  throw new Error('Missing required fields from webhook');\n}\n\n// Validate PR files\nif (prFiles.length === 0) {\n  console.error('ERROR: No files received from GitHub API');\n  throw new Error('No files to review');\n}\n\n// Construct the review prompt\nlet changesText = `Pull Request: ${prTitle}\\n`;\nchangesText += `Author: ${prAuthor}\\n`;\nchangesText += `Repository: ${username}/${repoName}\\n\\n`;\nchangesText += \"Please review the following pull request changes:\\n\\n\";\n\nlet totalAdditions = 0;\nlet totalDeletions = 0;\n\nfor (let i = 0; i < prFiles.length; i++) {\n  const fileData = prFiles[i].json;\n  \n  console.log(`\\n--- Processing File ${i + 1}/${prFiles.length} ---`);\n  console.log('Filename:', fileData.filename);\n  console.log('Status:', fileData.status);\n  console.log('Additions:', fileData.additions);\n  console.log('Deletions:', fileData.deletions);\n  console.log('Has patch:', !!fileData.patch);\n  \n  changesText += `File: ${fileData.filename}\\n`;\n  changesText += `Status: ${fileData.status}\\n`;\n  changesText += `Changes: +${fileData.additions} -${fileData.deletions}\\n`;\n  \n  totalAdditions += fileData.additions;\n  totalDeletions += fileData.deletions;\n  \n  if (fileData.patch) {\n    console.log('Patch length (chars):', fileData.patch.length);\n    changesText += `\\nDiff:\\n${fileData.patch}\\n`;\n  } else {\n    console.log('Warning: No patch data available for this file');\n  }\n  changesText += \"\\n---\\n\\n\";\n}\n\nconsole.log('\\n=== PR SUMMARY ===');\nconsole.log('Total additions:', totalAdditions);\nconsole.log('Total deletions:', totalDeletions);\nconsole.log('Total changes text length:', changesText.length);\n\n// Check if prompt is too long (Cerebras context limit consideration)\nif (changesText.length > 100000) {\n  console.warn('WARNING: Prompt is very long (' + changesText.length + ' chars)');\n  console.warn('Consider implementing chunking or summarization for large PRs');\n}\n\n// Construct Cerebras API payload\nconst cerebrasPayload = {\n  model: \"llama3.1-8b\",\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are an expert code reviewer. Provide constructive feedback on code changes, focusing on potential bugs, security issues, performance concerns, and best practices. Be concise and actionable.\"\n    },\n    {\n      role: \"user\",\n      content: changesText\n    }\n  ],\n  temperature: 0.3,\n  max_tokens: 2000,\n  top_p: 1,\n  stream: false\n};\n\nconsole.log('\\n=== CEREBRAS PAYLOAD CONSTRUCTED ===');\nconsole.log('Model:', cerebrasPayload.model);\nconsole.log('Temperature:', cerebrasPayload.temperature);\nconsole.log('Max tokens:', cerebrasPayload.max_tokens);\nconsole.log('Number of messages:', cerebrasPayload.messages.length);\nconsole.log('System prompt length:', cerebrasPayload.messages[0].content.length);\nconsole.log('User message length:', cerebrasPayload.messages[1].content.length);\n\nconst output = {\n  json: {\n    cerebrasPayload: cerebrasPayload,\n    pullNumber: pullNumber,\n    repoName: repoName,\n    username: username,\n    prTitle: prTitle,\n    prAuthor: prAuthor,\n    prUrl: prUrl,\n    stats: {\n      filesChanged: prFiles.length,\n      totalAdditions: totalAdditions,\n      totalDeletions: totalDeletions,\n      promptLength: changesText.length\n    }\n  }\n};\n\nconsole.log('\\n=== OUTPUT PREPARED ===');\nconsole.log('Output keys:', Object.keys(output.json));\nconsole.log('Stats:', JSON.stringify(output.json.stats, null, 2));\nconsole.log('PR URL:', prUrl);\nconsole.log('=== DATA TRANSFORMATION COMPLETE ===\\n');\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        48
+      ],
+      "id": "0768c5cf-295a-46ba-a147-d361fc8baced",
+      "name": "organize_code_changes_for_ai"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.body.username }}/{{ $json.body.repo_name }}/pulls/{{ $json.body.pull_number }}/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": " n8n-workflow"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        464,
+        48
+      ],
+      "id": "f2478afc-3c71-4e62-9cbe-eec87728f01c",
+      "name": "get_pr_changes",
+      "credentials": {
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "75ed4944-455f-4580-9a4b-d8662244f929",
+        "options": {
+          "rawBody": false,
+          "responseData": "success"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        16,
+        48
+      ],
+      "id": "9f13d8b2-3f23-4618-9a6b-2127af9562e7",
+      "name": "trigger_code_review_pipeline",
+      "webhookId": "75ed4944-455f-4580-9a4b-d8662244f929",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('=== WEBHOOK DATA RECEIVED ===');\nconst webhookData = $input.first().json;\nconsole.log('Full webhook data:', JSON.stringify(webhookData, null, 2));\nconsole.log('pull_number:', webhookData.pull_number);\nconsole.log('repo_name:', webhookData.repo_name);\nconsole.log('username:', webhookData.username);\nconsole.log('=== END WEBHOOK DATA ===');\n\nreturn [$input.first()];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        48
+      ],
+      "id": "6e03db82-e703-4266-8240-6c02b871df52",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log('=== COMBINE CEREBRAS RESPONSE WITH PR DATA ===');\n\n// Get Cerebras response (it's an array)\nconst cerebrasResponseArray = $input.first().json;\nconst cerebrasResponse = Array.isArray(cerebrasResponseArray) \n  ? cerebrasResponseArray[0] \n  : cerebrasResponseArray;\n\nconsole.log('Cerebras response received');\nconsole.log('- Model:', cerebrasResponse.model);\nconsole.log('- Response ID:', cerebrasResponse.id);\n\n// Validate Cerebras response\nif (!cerebrasResponse.choices || cerebrasResponse.choices.length === 0) {\n  console.error('ERROR: No choices in Cerebras response');\n  throw new Error('Invalid Cerebras response');\n}\n\n// Extract the review content\nconst reviewContent = cerebrasResponse.choices[0].message.content;\nconsole.log('- Review length:', reviewContent.length, 'characters');\n\n// Log token usage\nif (cerebrasResponse.usage) {\n  console.log('\\n=== TOKEN USAGE ===');\n  console.log('- Prompt tokens:', cerebrasResponse.usage.prompt_tokens);\n  console.log('- Completion tokens:', cerebrasResponse.usage.completion_tokens);\n  console.log('- Total tokens:', cerebrasResponse.usage.total_tokens);\n}\n\n// Log timing info\nif (cerebrasResponse.time_info) {\n  console.log('\\n=== TIMING INFO ===');\n  console.log('- Total time:', cerebrasResponse.time_info.total_time.toFixed(3), 'seconds');\n  console.log('- Completion time:', cerebrasResponse.time_info.completion_time.toFixed(3), 'seconds');\n}\n\n// Get PR metadata from the transform node\nconsole.log('\\n=== RETRIEVING PR METADATA ===');\n\nlet prData = $('organize_code_changes_for_ai').first().json;\n  console.log('✓ Found PR data from organize_code_changes_for_ai node');\n\n\nconsole.log('PR data keys:', Object.keys(prData));\n\n// Extract PR metadata\nconst pullNumber = prData.pullNumber;\nconst repoName = prData.repoName;\nconst username = prData.username;\nconst prTitle = prData.prTitle;\nconst prAuthor = prData.prAuthor;\nconst prUrl = prData.prUrl;\nconst stats = prData.stats;\n\nconsole.log('\\n=== PR INFORMATION ===');\nconsole.log('- PR Number:', pullNumber);\nconsole.log('- Repository:', `${username}/${repoName}`);\nconsole.log('- Title:', prTitle);\nconsole.log('- Author:', prAuthor);\nconsole.log('- Files Changed:', stats.filesChanged);\nconsole.log('- Lines Added:', stats.totalAdditions);\nconsole.log('- Lines Deleted:', stats.totalDeletions);\n\n// Validate required data\nif (!username || !repoName || !pullNumber) {\n  console.error('ERROR: Missing required PR metadata');\n  console.error('username:', username);\n  console.error('repoName:', repoName);\n  console.error('pullNumber:', pullNumber);\n  throw new Error('Missing required PR metadata');\n}\n\n// Format the GitHub comment with rich details\nconst commentBody = `## 🤖 AI Code Review\n\n${reviewContent}\n\n---\n\n<details>\n<summary>📊 <strong>Review Statistics</strong></summary>\n\n**Pull Request Details:**\n- **Title**: ${prTitle}\n- **Author**: [@${prAuthor}](https://github.com/${prAuthor})\n- **PR**: [#${pullNumber}](${prUrl})\n\n**Changes:**\n- 📝 **Files Changed**: ${stats.filesChanged}\n- ➕ **Lines Added**: ${stats.totalAdditions}\n- ➖ **Lines Deleted**: ${stats.totalDeletions}\n- 📦 **Total Changes**: ${stats.totalAdditions + stats.totalDeletions} lines\n\n**AI Model:**\n- 🤖 **Model**: ${cerebrasResponse.model}\n- 🎯 **Tokens Used**: ${cerebrasResponse.usage.total_tokens.toLocaleString()} tokens\n  - Prompt: ${cerebrasResponse.usage.prompt_tokens.toLocaleString()}\n  - Completion: ${cerebrasResponse.usage.completion_tokens.toLocaleString()}\n- ⚡ **Processing Time**: ${cerebrasResponse.time_info.total_time.toFixed(2)}s\n- 📅 **Generated**: ${new Date().toLocaleString('en-US', { \n    timeZone: 'Africa/Cairo', \n    dateStyle: 'full', \n    timeStyle: 'short' \n  })}\n\n</details>\n\n---\n\n<sub>🤖 Powered by [Cerebras AI](https://cerebras.ai/) • 🔧 Automated via [n8n](https://n8n.io/) • 🌐 [View Workflow](${prUrl})</sub>`;\n\n// Build GitHub API URL\nconst githubApiUrl = `https://api.github.com/repos/${username}/${repoName}/issues/${pullNumber}/comments`;\n\nconsole.log('\\n=== GITHUB COMMENT PREPARED ===');\nconsole.log('- API URL:', githubApiUrl);\nconsole.log('- Comment length:', commentBody.length, 'characters');\nconsole.log('- Preview:', commentBody.substring(0, 150) + '...');\n\n// Prepare the output for GitHub API\nconst githubPayload = {\n  body: commentBody\n};\n\nconsole.log('\\n=== PAYLOAD PREPARED ===');\nconsole.log('- Payload is valid JSON:', typeof githubPayload === 'object');\nconsole.log('- Body field exists:', !!githubPayload.body);\n\nconsole.log('=== PROCESSING COMPLETE ===\\n');\n\n// FIXED: Everything must be inside the json property\nreturn {\n  json: {\n    body: commentBody,\n    url: githubApiUrl,\n    pullNumber: pullNumber,\n    repoName: repoName,\n    username: username,\n    metadata: {\n      model: cerebrasResponse.model,\n      tokens: cerebrasResponse.usage.total_tokens,\n      processingTime: cerebrasResponse.time_info.total_time,\n      stats: stats\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        48
+      ],
+      "id": "c62d2fae-ff1b-4faa-8495-b2dd0041f3c7",
+      "name": "transform_code_review"
+    }
+  ],
+  "pinData": {
+    "trigger_code_review_pipeline": [
+      {
+        "json": {
+          "headers": {
+            "host": "50de94130861.ngrok-free.app",
+            "user-agent": "curl/8.5.0",
+            "content-length": "337",
+            "accept": "*/*",
+            "content-type": "application/json",
+            "x-forwarded-for": "20.171.125.211",
+            "x-forwarded-host": "50de94130861.ngrok-free.app",
+            "x-forwarded-proto": "https",
+            "accept-encoding": "gzip"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "pull_number": 1,
+            "repo_name": "n8n-code-review",
+            "username": "mahmoudalnkeeb",
+            "pr_title": "Test",
+            "pr_author": "mahmoudalnkeeb",
+            "base_branch": "main",
+            "head_branch": "test",
+            "pr_url": "https://github.com/mahmoudalnkeeb/n8n-code-review/pull/1",
+            "triggered_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          },
+          "webhookUrl": "https://50de94130861.ngrok-free.app/webhook/75ed4944-455f-4580-9a4b-d8662244f929",
+          "executionMode": "production"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "get_code_review": {
+      "main": [
+        [
+          {
+            "node": "transform_code_review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "organize_code_changes_for_ai": {
+      "main": [
+        [
+          {
+            "node": "get_code_review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_pr_changes": {
+      "main": [
+        [
+          {
+            "node": "organize_code_changes_for_ai",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "trigger_code_review_pipeline": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "get_pr_changes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "transform_code_review": {
+      "main": [
+        [
+          {
+            "node": "send_code_review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "4543e376-129d-49a6-8db2-0cf96ea763ca",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ff9aa58e8f6d26a0b99b7fa85d37e216402c861d9fc31599402741e04aed3980"
+  },
+  "id": "pHv5KJLXCY7GEvwR",
+  "tags": []
+}
